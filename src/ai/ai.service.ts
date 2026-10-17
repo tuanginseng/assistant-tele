@@ -282,7 +282,7 @@ Tin nhắn người dùng: "${text}"
       }
 
       if (parsed.intent === 'ANALYZE_SCHEDULE') {
-        let scheduleScope: 'today' | 'week' | 'month' | 'upcoming' = 'week';
+        let scheduleScope: 'today' | 'week' | 'month' | 'upcoming' = 'month';
         if (['today', 'week', 'month', 'upcoming'].includes(parsed.scheduleScope)) {
           scheduleScope = parsed.scheduleScope;
         }
@@ -361,9 +361,9 @@ Tin nhắn người dùng: "${text}"
         cleanLower,
       )
     ) {
-      let scope: 'today' | 'week' | 'month' | 'upcoming' = 'week';
+      let scope: 'today' | 'week' | 'month' | 'upcoming' = 'month';
       if (/hôm\s*nay/i.test(cleanLower)) scope = 'today';
-      else if (/tháng/i.test(cleanLower)) scope = 'month';
+      else if (/tuần/i.test(cleanLower)) scope = 'week';
       else if (/sắp\s*tới|tới/i.test(cleanLower)) scope = 'upcoming';
       return { intent: 'ANALYZE_SCHEDULE', scheduleScope: scope };
     }
@@ -746,7 +746,8 @@ Danh sách sự kiện (${scopeTitle}):
 ${eventsFormatted}
 
 Yêu cầu định dạng phản hồi:
-- Sử dụng chuẩn HTML của Telegram (dùng <b>, <i>, <code>). TUYỆT ĐỐI KHÔNG dùng markdown (không dùng **, ##, \`\`\`).
+- Sử dụng chuẩn HTML của Telegram (CHỈ dùng <b>, <i>, <code>). TUYỆT ĐỐI KHÔNG dùng markdown (không dùng **, ##, \`\`\`).
+- TUYỆT ĐỐI KHÔNG dùng các thẻ <p>, </p>, <br>, <ul>, </ul>, <ol>, </ol>, <li>, </li>, <div>, </div>. Chỉ dùng dấu xuống dòng bình thường và ký hiệu đầu dòng •.
 - Cấu trúc phản hồi rõ ràng, mạch lạc, đẹp mắt, có emoji sinh động:
   1. Tiêu đề: 🧠 <b>PHÂN TÍCH LỊCH TRÌNH (MA TRẬN EISENHOWER)</b>\n📅 <i>Phạm vi: ${scopeTitle} (${events.length} sự kiện)</i>
   2. Phân loại từng sự kiện vào đúng 4 góc phần tư:
@@ -786,7 +787,7 @@ Hãy trả lời bằng tiếng Việt chuyên nghiệp, súc tích và truyền
 
         const reply = response.text?.trim();
         if (reply) {
-          return reply;
+          return this.sanitizeTelegramHtml(reply);
         }
       } catch (err) {
         this.logger.error('Error generating Eisenhower analysis with Gemini:', err);
@@ -794,7 +795,29 @@ Hãy trả lời bằng tiếng Việt chuyên nghiệp, súc tích và truyền
     }
 
     // Fallback rule-based if AI not reachable
-    return this.fallbackEisenhowerAnalysis(events, scopeTitle);
+    return this.sanitizeTelegramHtml(this.fallbackEisenhowerAnalysis(events, scopeTitle));
+  }
+
+  public sanitizeTelegramHtml(text: string): string {
+    if (!text) return '';
+    return text
+      .replace(/<p\b[^>]*>/gi, '')
+      .replace(/<\/p>/gi, '\n\n')
+      .replace(/<br\s*\/?>/gi, '\n')
+      .replace(/<ul\b[^>]*>/gi, '')
+      .replace(/<\/ul>/gi, '\n')
+      .replace(/<ol\b[^>]*>/gi, '')
+      .replace(/<\/ol>/gi, '\n')
+      .replace(/<li\b[^>]*>/gi, '• ')
+      .replace(/<\/li>/gi, '\n')
+      .replace(/<div\b[^>]*>/gi, '')
+      .replace(/<\/div>/gi, '\n')
+      .replace(/<h[1-6]\b[^>]*>/gi, '\n<b>')
+      .replace(/<\/h[1-6]>/gi, '</b>\n')
+      // Strip any tags not supported by Telegram HTML
+      .replace(/<(?!\/?(?:b|strong|i|em|u|ins|s|strike|del|code|pre|a|blockquote|tg-spoiler)\b)[^>]*>/gi, '')
+      .replace(/\n{3,}/g, '\n\n')
+      .trim();
   }
 
   private fallbackEisenhowerAnalysis(events: CalendarEvent[], scopeTitle: string): string {

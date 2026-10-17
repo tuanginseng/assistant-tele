@@ -564,14 +564,14 @@ export class BotUpdate {
   @Command('matrix')
   async handleManageScheduleCommand(@Ctx() ctx: Context) {
     if (!this.checkReady(ctx)) return;
-    await this.runEisenhowerAnalysis(ctx, 'week');
+    await this.runEisenhowerAnalysis(ctx, 'month');
   }
 
   @Action('manage_schedule')
   async handleManageScheduleAction(@Ctx() ctx: Context) {
-    await ctx.answerCbQuery('Đang phân tích lịch trình...').catch(() => {});
+    await ctx.answerCbQuery('Đang phân tích lịch tháng này...').catch(() => {});
     if (!this.checkReady(ctx)) return;
-    await this.runEisenhowerAnalysis(ctx, 'week');
+    await this.runEisenhowerAnalysis(ctx, 'month');
   }
 
   @Action('eisenhower_week')
@@ -629,14 +629,19 @@ export class BotUpdate {
     await this.handleSettings(ctx);
   }
 
-  private async runEisenhowerAnalysis(ctx: Context, scope: 'today' | 'week' | 'month' | 'upcoming') {
+  private async runEisenhowerAnalysis(ctx: Context, scope: 'today' | 'week' | 'month' | 'upcoming' = 'month') {
     await ctx.sendChatAction('typing').catch(() => {});
     let events: any[] = [];
-    let scopeTitle = 'Tuần này';
+    const currentMonthName = new Date().toLocaleDateString('vi-VN', {
+      month: 'long',
+      year: 'numeric',
+      timeZone: 'Asia/Ho_Chi_Minh',
+    });
+    let scopeTitle = `Tháng hiện tại (${currentMonthName})`;
 
     let statusMsg: any = null;
     try {
-      statusMsg = await ctx.reply('⏳ 🧠 Đang tổng hợp lịch và phân tích theo Ma trận Eisenhower...');
+      statusMsg = await ctx.reply(`⏳ 🧠 Đang tổng hợp lịch ${scope === 'month' ? currentMonthName : scope} và phân tích theo Ma trận Eisenhower...`);
     } catch {}
 
     const typingInterval = setInterval(() => {
@@ -647,15 +652,16 @@ export class BotUpdate {
       if (scope === 'today') {
         events = await this.calendarService.getTodayEvents();
         scopeTitle = 'Hôm nay';
-      } else if (scope === 'month') {
-        events = await this.calendarService.getThisMonthEvents();
-        scopeTitle = 'Tháng này';
+      } else if (scope === 'week') {
+        events = await this.calendarService.getThisWeekEvents();
+        scopeTitle = 'Tuần này';
       } else if (scope === 'upcoming') {
         events = await this.calendarService.getUpcomingEvents(10);
         scopeTitle = '10 sự kiện sắp tới';
       } else {
-        events = await this.calendarService.getThisWeekEvents();
-        scopeTitle = 'Tuần này';
+        // Default: Current Month
+        events = await this.calendarService.getThisMonthEvents();
+        scopeTitle = `Tháng hiện tại (${currentMonthName})`;
       }
 
       const result = await this.aiService.analyzeEisenhowerMatrix(events, scopeTitle);
@@ -666,10 +672,18 @@ export class BotUpdate {
         } catch {}
       }
 
-      await ctx.reply(result, {
-        parse_mode: 'HTML',
-        reply_markup: this.buildEisenhowerFollowupKeyboard(),
-      });
+      try {
+        await ctx.reply(result, {
+          parse_mode: 'HTML',
+          reply_markup: this.buildEisenhowerFollowupKeyboard(),
+        });
+      } catch (sendErr: any) {
+        this.logger.warn(`Failed to send HTML Eisenhower analysis (${sendErr.message}), falling back to plain text`);
+        const plainText = result.replace(/<[^>]+>/g, '');
+        await ctx.reply(plainText, {
+          reply_markup: this.buildEisenhowerFollowupKeyboard(),
+        });
+      }
     } catch (err) {
       this.logger.error('Error running Eisenhower analysis:', err);
       if (statusMsg && ctx.chat) {
@@ -687,13 +701,12 @@ export class BotUpdate {
     return {
       inline_keyboard: [
         [
-          { text: '🗓️ Tuần này', callback_data: 'eisenhower_week' },
-          { text: '📅 Hôm nay', callback_data: 'eisenhower_today' },
-          { text: '📋 10 sự kiện tới', callback_data: 'eisenhower_upcoming' },
+          { text: '📆 Phân tích lại Tháng này', callback_data: 'eisenhower_month' },
         ],
         [
-          { text: '📆 Tháng này', callback_data: 'eisenhower_month' },
-          { text: '📊 Báo cáo vận hành', callback_data: 'trigger_report' },
+          { text: '🗓️ Tuần này', callback_data: 'eisenhower_week' },
+          { text: '📅 Hôm nay', callback_data: 'eisenhower_today' },
+          { text: '📊 Báo cáo', callback_data: 'trigger_report' },
         ],
       ],
     };
@@ -1122,7 +1135,7 @@ export class BotUpdate {
 
         case 'ANALYZE_SCHEDULE':
           await cleanupStatus();
-          await this.runEisenhowerAnalysis(ctx, result.scheduleScope || 'week');
+          await this.runEisenhowerAnalysis(ctx, result.scheduleScope || 'month');
           break;
 
         case 'CHAT':
