@@ -1135,7 +1135,7 @@ export class BotUpdate {
 
         case 'ANALYZE_SCHEDULE':
           await cleanupStatus();
-          await this.runEisenhowerAnalysis(ctx, result.scheduleScope || 'month');
+          await this.runEisenhowerAnalysis(ctx, 'month');
           break;
 
         case 'CHAT':

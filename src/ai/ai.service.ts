@@ -137,7 +137,7 @@ Phân tích tin nhắn của người dùng và trả về DUY NHẤT một đ�
   "reminderTime": "chuỗi giờ dạng '08:00' hoặc '15:00' nếu cài giờ thông báo lịch hoặc giờ gửi báo cáo",
   "reminderEnabled": true hoặc false nếu người dùng muốn bật hoặc tắt thông báo hàng ngày,
   "reportUrl": "đường link Google Sheet nếu intent là SET_REPORT_URL",
-  "scheduleScope": "today" | "week" | "month" | "upcoming" (dùng khi intent là ANALYZE_SCHEDULE, mặc định là "week"),
+  "scheduleScope": "month",
   "searchQuery": "từ khóa tìm kiếm nếu intent là SEARCH_EVENTS (LƯU Ý: chỉ dùng khi tìm theo TÊN sự kiện, không dùng khi tìm theo ngày)",
   "deleteKeyword": "từ khóa hoặc tên sự kiện muốn xóa nếu intent là DELETE_EVENT",
   "aiReply": "Lời phản hồi thân thiện ngắn gọn bằng tiếng Việt nếu là CHAT"
@@ -147,7 +147,7 @@ Lưu ý:
 - "thứ 4 tuần sau": tính đúng ngày thứ 4 của tuần tiếp theo.
 - "mai", "ngày mai": ngày kế tiếp.
 - Nếu người dùng yêu cầu báo cáo (ví dụ: "báo cáo hôm nay", "gửi báo cáo", "xem báo cáo", "báo cáo", "báo cáo ngày 16/10", "chạy báo cáo") -> intent BẮT BUỘC là "GENERATE_REPORT". Nếu có ngày thì trả về targetDate tương ứng.
-- Nếu người dùng yêu cầu quản lý lịch, phân tích lịch trình, đánh giá lịch trình theo ma trận Eisenhower (ví dụ: "quản lý", "quản lý lịch trình", "phân tích lịch", "đánh giá lịch", "ma trận eisenhower", "tối ưu lịch", "quản lý lịch của tôi") -> intent BẮT BUỘC là "ANALYZE_SCHEDULE". Gán scheduleScope tương ứng ("today" nếu hỏi hôm nay, "month" nếu hỏi tháng, "upcoming" nếu hỏi sắp tới, mặc định "week").
+- Nếu người dùng yêu cầu quản lý lịch, phân tích lịch trình, đánh giá lịch trình theo ma trận Eisenhower (ví dụ: "quản lý", "quản lý lịch trình", "phân tích lịch", "đánh giá lịch", "ma trận eisenhower", "tối ưu lịch", "quản lý lịch của tôi") -> intent BẮT BUỘC là "ANALYZE_SCHEDULE", scheduleScope BẮT BUỘC là "month" (chỉ phân tích lịch của tháng hiện tại).
 - Nếu người dùng gửi link Google Sheet cài đặt báo cáo (ví dụ: "cài link báo cáo https://docs.google.com/...", "link báo cáo https://...", hoặc chỉ gửi link docs.google.com/spreadsheets/...) -> intent BẮT BUỘC là "SET_REPORT_URL", reportUrl là link Google Sheet đó.
 - Nếu người dùng yêu cầu đổi giờ gửi báo cáo (ví dụ: "đổi giờ báo cáo sang 15h", "cài giờ gửi báo cáo lúc 15:00") -> intent là "SET_REPORT_TIME", reminderTime là "15:00".
 - Nếu người dùng hỏi xem lịch của một ngày cụ thể (ví dụ: "lịch ngày 22", "ngày 22 có lịch gì không", "lịch 22/10", "lịch thứ 4 tuần sau", "xem lịch ngày 25") -> intent BẮT BUỘC là "VIEW_DATE", targetDate là "YYYY-MM-DD" tương ứng (ví dụ: "2026-10-22"). TUYỆT ĐỐI KHÔNG xếp vào SEARCH_EVENTS.
@@ -282,13 +282,9 @@ Tin nhắn người dùng: "${text}"
       }
 
       if (parsed.intent === 'ANALYZE_SCHEDULE') {
-        let scheduleScope: 'today' | 'week' | 'month' | 'upcoming' = 'month';
-        if (['today', 'week', 'month', 'upcoming'].includes(parsed.scheduleScope)) {
-          scheduleScope = parsed.scheduleScope;
-        }
         return {
           intent: 'ANALYZE_SCHEDULE',
-          scheduleScope,
+          scheduleScope: 'month',
           aiReply: parsed.aiReply,
         };
       }
