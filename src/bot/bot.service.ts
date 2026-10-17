@@ -280,6 +280,10 @@ export class BotService {
 /settings — Mở bảng cài đặt giờ gửi thông báo lịch hàng ngày
 /reminder — Xem trạng thái và đổi giờ thông báo
 
+🧠 <b>Quản lý lịch trình bằng AI (Ma trận Eisenhower):</b>
+• <code>/manage</code> hoặc <code>quản lý</code> — Phân tích toàn bộ lịch theo 4 góc phần tư Eisenhower (Q1, Q2, Q3, Q4) & đánh giá mức độ cân bằng quỹ thời gian.
+• Nhắn tự nhiên: <code>quản lý lịch trình</code>, <code>đánh giá lịch của tôi</code>, <code>quản lý hôm nay</code>, <code>quản lý tuần này</code>.
+
 📊 <b>Báo cáo công việc / vận hành hàng ngày:</b>
 • <code>/report</code> hoặc <code>báo cáo</code> — Xem báo cáo ngày hôm qua
 • <code>/report 16/10</code> — Xem báo cáo theo ngày cụ thể

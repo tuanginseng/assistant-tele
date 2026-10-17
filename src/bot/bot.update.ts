@@ -26,17 +26,65 @@ export class BotUpdate {
   @Start()
   async handleStart(@Ctx() ctx: Context) {
     const firstName = ctx.from?.first_name || 'bạn';
+    if (ctx.chat) {
+      this.reminderService.addChatId(ctx.chat.id);
+      this.reportService.addChatId(ctx.chat.id);
+    }
     await ctx.reply(
       `Xin chào ${firstName}! 👋\n\n` +
-      `Tôi là Trợ Lý Lịch - bot giúp bạn quản lý Google Calendar ngay trên Telegram.\n\n` +
-      `Gõ /help để xem danh sách lệnh có sẵn.\n` +
-      `Gõ /auth nếu bạn chưa kết nối Google Calendar.`,
+      `Tôi là <b>Trợ Lý Lịch & Báo Cáo Thông Minh</b>.\n\n` +
+      `✨ <b>Các tính năng chính:</b>\n` +
+      `• 🧠 <b>Quản lý lịch bằng AI:</b> Phân tích lịch theo Ma trận Eisenhower (Q1, Q2, Q3, Q4) & đánh giá mức độ cân bằng.\n` +
+      `• 📅 <b>Quản lý Google Calendar:</b> Xem, thêm, sửa, xóa sự kiện bằng ngôn ngữ tự nhiên.\n` +
+      `• 📊 <b>Báo cáo công việc tự động:</b> Tổng hợp doanh thu & chỉ số hàng ngày lúc 15:00.\n\n` +
+      `👇 <i>Bấm chọn nút nhanh bên dưới hoặc gõ /help để xem chi tiết:</i>`,
+      {
+        parse_mode: 'HTML',
+        reply_markup: {
+          inline_keyboard: [
+            [
+              { text: '🧠 Quản lý lịch trình (Eisenhower)', callback_data: 'manage_schedule' },
+            ],
+            [
+              { text: '📅 Lịch hôm nay', callback_data: 'view_today' },
+              { text: '🗓️ Lịch tuần này', callback_data: 'view_week' },
+            ],
+            [
+              { text: '📊 Báo cáo vận hành', callback_data: 'trigger_report' },
+              { text: '⚙️ Cài đặt', callback_data: 'open_settings' },
+            ],
+          ],
+        },
+      },
     );
+
+    // Also send bottom persistent quick-action keyboard
+    try {
+      await ctx.reply('Bàn phím tác vụ nhanh đã sẵn sàng 👇', {
+        reply_markup: {
+          keyboard: [
+            [{ text: '🧠 Quản lý lịch trình' }, { text: '📅 Lịch hôm nay' }],
+            [{ text: '🗓️ Lịch tuần này' }, { text: '📊 Báo cáo' }],
+          ],
+          resize_keyboard: true,
+        },
+      });
+    } catch {}
   }
 
   @Help()
   async handleHelp(@Ctx() ctx: Context) {
-    await ctx.reply(this.botService.getHelpMessage(), { parse_mode: 'HTML' });
+    await ctx.reply(this.botService.getHelpMessage(), {
+      parse_mode: 'HTML',
+      reply_markup: {
+        inline_keyboard: [
+          [
+            { text: '🧠 Quản lý lịch trình (Eisenhower)', callback_data: 'manage_schedule' },
+            { text: '📊 Xem báo cáo', callback_data: 'trigger_report' },
+          ],
+        ],
+      },
+    });
   }
 
   // =============================================
@@ -499,6 +547,154 @@ export class BotUpdate {
           },
           { text: '🚀 Gửi thử ngay', callback_data: 'test_reminder' },
         ],
+        [
+          { text: '🧠 Quản lý lịch trình (AI Eisenhower)', callback_data: 'manage_schedule' },
+        ],
+      ],
+    };
+  }
+
+  // =============================================
+  //  AI SCHEDULE MANAGEMENT (EISENHOWER MATRIX)
+  // =============================================
+
+  @Command('manage')
+  @Command('quanly')
+  @Command('eisenhower')
+  @Command('matrix')
+  async handleManageScheduleCommand(@Ctx() ctx: Context) {
+    if (!this.checkReady(ctx)) return;
+    await this.runEisenhowerAnalysis(ctx, 'week');
+  }
+
+  @Action('manage_schedule')
+  async handleManageScheduleAction(@Ctx() ctx: Context) {
+    await ctx.answerCbQuery('Đang phân tích lịch trình...').catch(() => {});
+    if (!this.checkReady(ctx)) return;
+    await this.runEisenhowerAnalysis(ctx, 'week');
+  }
+
+  @Action('eisenhower_week')
+  async handleEisenhowerWeekAction(@Ctx() ctx: Context) {
+    await ctx.answerCbQuery('Đang phân tích lịch tuần này...').catch(() => {});
+    if (!this.checkReady(ctx)) return;
+    await this.runEisenhowerAnalysis(ctx, 'week');
+  }
+
+  @Action('eisenhower_today')
+  async handleEisenhowerTodayAction(@Ctx() ctx: Context) {
+    await ctx.answerCbQuery('Đang phân tích lịch hôm nay...').catch(() => {});
+    if (!this.checkReady(ctx)) return;
+    await this.runEisenhowerAnalysis(ctx, 'today');
+  }
+
+  @Action('eisenhower_upcoming')
+  async handleEisenhowerUpcomingAction(@Ctx() ctx: Context) {
+    await ctx.answerCbQuery('Đang phân tích 10 sự kiện tới...').catch(() => {});
+    if (!this.checkReady(ctx)) return;
+    await this.runEisenhowerAnalysis(ctx, 'upcoming');
+  }
+
+  @Action('eisenhower_month')
+  async handleEisenhowerMonthAction(@Ctx() ctx: Context) {
+    await ctx.answerCbQuery('Đang phân tích lịch tháng này...').catch(() => {});
+    if (!this.checkReady(ctx)) return;
+    await this.runEisenhowerAnalysis(ctx, 'month');
+  }
+
+  @Action('view_today')
+  async handleViewTodayAction(@Ctx() ctx: Context) {
+    await ctx.answerCbQuery().catch(() => {});
+    await this.handleToday(ctx);
+  }
+
+  @Action('view_week')
+  async handleViewWeekAction(@Ctx() ctx: Context) {
+    await ctx.answerCbQuery().catch(() => {});
+    await ctx.sendChatAction('typing').catch(() => {});
+    const thisWeekEvents = await this.calendarService.getThisWeekEvents();
+    const msg = this.botService.formatEventList(thisWeekEvents, '📅 <b>Lịch tuần này:</b>');
+    await ctx.reply(msg, { parse_mode: 'HTML' });
+  }
+
+  @Action('trigger_report')
+  async handleTriggerReportAction(@Ctx() ctx: Context) {
+    await ctx.answerCbQuery('Đang tải báo cáo...').catch(() => {});
+    await this.handleReportCommand(ctx);
+  }
+
+  @Action('open_settings')
+  async handleOpenSettingsAction(@Ctx() ctx: Context) {
+    await ctx.answerCbQuery().catch(() => {});
+    await this.handleSettings(ctx);
+  }
+
+  private async runEisenhowerAnalysis(ctx: Context, scope: 'today' | 'week' | 'month' | 'upcoming') {
+    await ctx.sendChatAction('typing').catch(() => {});
+    let events: any[] = [];
+    let scopeTitle = 'Tuần này';
+
+    let statusMsg: any = null;
+    try {
+      statusMsg = await ctx.reply('⏳ 🧠 Đang tổng hợp lịch và phân tích theo Ma trận Eisenhower...');
+    } catch {}
+
+    const typingInterval = setInterval(() => {
+      ctx.sendChatAction('typing').catch(() => {});
+    }, 2500);
+
+    try {
+      if (scope === 'today') {
+        events = await this.calendarService.getTodayEvents();
+        scopeTitle = 'Hôm nay';
+      } else if (scope === 'month') {
+        events = await this.calendarService.getThisMonthEvents();
+        scopeTitle = 'Tháng này';
+      } else if (scope === 'upcoming') {
+        events = await this.calendarService.getUpcomingEvents(10);
+        scopeTitle = '10 sự kiện sắp tới';
+      } else {
+        events = await this.calendarService.getThisWeekEvents();
+        scopeTitle = 'Tuần này';
+      }
+
+      const result = await this.aiService.analyzeEisenhowerMatrix(events, scopeTitle);
+
+      if (statusMsg && ctx.chat) {
+        try {
+          await ctx.deleteMessage(statusMsg.message_id);
+        } catch {}
+      }
+
+      await ctx.reply(result, {
+        parse_mode: 'HTML',
+        reply_markup: this.buildEisenhowerFollowupKeyboard(),
+      });
+    } catch (err) {
+      this.logger.error('Error running Eisenhower analysis:', err);
+      if (statusMsg && ctx.chat) {
+        try {
+          await ctx.deleteMessage(statusMsg.message_id);
+        } catch {}
+      }
+      await ctx.reply('❌ Không thể phân tích lịch trình lúc này. Vui lòng thử lại sau.');
+    } finally {
+      clearInterval(typingInterval);
+    }
+  }
+
+  private buildEisenhowerFollowupKeyboard() {
+    return {
+      inline_keyboard: [
+        [
+          { text: '🗓️ Tuần này', callback_data: 'eisenhower_week' },
+          { text: '📅 Hôm nay', callback_data: 'eisenhower_today' },
+          { text: '📋 10 sự kiện tới', callback_data: 'eisenhower_upcoming' },
+        ],
+        [
+          { text: '📆 Tháng này', callback_data: 'eisenhower_month' },
+          { text: '📊 Báo cáo vận hành', callback_data: 'trigger_report' },
+        ],
       ],
     };
   }
@@ -922,6 +1118,11 @@ export class BotUpdate {
               { parse_mode: 'HTML' },
             );
           }
+          break;
+
+        case 'ANALYZE_SCHEDULE':
+          await cleanupStatus();
+          await this.runEisenhowerAnalysis(ctx, result.scheduleScope || 'week');
           break;
 
         case 'CHAT':

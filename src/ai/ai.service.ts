@@ -1,6 +1,7 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { GoogleGenAI } from '@google/genai';
+import { CalendarEvent } from '../google-calendar/google-calendar.service';
 
 export interface ParsedEventData {
   summary: string;
@@ -38,6 +39,7 @@ export type UserIntent =
   | 'GENERATE_REPORT'
   | 'SET_REPORT_URL'
   | 'SET_REPORT_TIME'
+  | 'ANALYZE_SCHEDULE'
   | 'CHAT'
   | 'UNKNOWN';
 
@@ -51,6 +53,7 @@ export interface ProcessedUserMessage {
   searchQuery?: string;
   deleteKeyword?: string;
   reportUrl?: string;
+  scheduleScope?: 'today' | 'week' | 'month' | 'upcoming';
   aiReply?: string;
 }
 
@@ -112,7 +115,7 @@ Nhiệm vụ:
 Phân tích tin nhắn của người dùng và trả về DUY NHẤT một đối tượng JSON hợp lệ (không kèm markdown code block hoặc text nào khác) theo schema sau:
 
 {
-  "intent": "CREATE_EVENT" | "UPDATE_EVENT" | "VIEW_TODAY" | "VIEW_TOMORROW" | "VIEW_DATE" | "VIEW_THIS_WEEK" | "VIEW_NEXT_WEEK" | "VIEW_THIS_MONTH" | "VIEW_NEXT_MONTH" | "VIEW_UPCOMING" | "SEARCH_EVENTS" | "DELETE_EVENT" | "SET_REMINDER_TIME" | "GENERATE_REPORT" | "SET_REPORT_URL" | "SET_REPORT_TIME" | "CHAT" | "UNKNOWN",
+  "intent": "CREATE_EVENT" | "UPDATE_EVENT" | "VIEW_TODAY" | "VIEW_TOMORROW" | "VIEW_DATE" | "VIEW_THIS_WEEK" | "VIEW_NEXT_WEEK" | "VIEW_THIS_MONTH" | "VIEW_NEXT_MONTH" | "VIEW_UPCOMING" | "SEARCH_EVENTS" | "DELETE_EVENT" | "SET_REMINDER_TIME" | "GENERATE_REPORT" | "SET_REPORT_URL" | "SET_REPORT_TIME" | "ANALYZE_SCHEDULE" | "CHAT" | "UNKNOWN",
   "event": {
     "summary": "Tên sự kiện (ví dụ: Học lái xe, Họp team, Đi ăn)",
     "startTime": "ISO 8601 string với múi giờ +07:00",
@@ -134,6 +137,7 @@ Phân tích tin nhắn của người dùng và trả về DUY NHẤT một đ�
   "reminderTime": "chuỗi giờ dạng '08:00' hoặc '15:00' nếu cài giờ thông báo lịch hoặc giờ gửi báo cáo",
   "reminderEnabled": true hoặc false nếu người dùng muốn bật hoặc tắt thông báo hàng ngày,
   "reportUrl": "đường link Google Sheet nếu intent là SET_REPORT_URL",
+  "scheduleScope": "today" | "week" | "month" | "upcoming" (dùng khi intent là ANALYZE_SCHEDULE, mặc định là "week"),
   "searchQuery": "từ khóa tìm kiếm nếu intent là SEARCH_EVENTS (LƯU Ý: chỉ dùng khi tìm theo TÊN sự kiện, không dùng khi tìm theo ngày)",
   "deleteKeyword": "từ khóa hoặc tên sự kiện muốn xóa nếu intent là DELETE_EVENT",
   "aiReply": "Lời phản hồi thân thiện ngắn gọn bằng tiếng Việt nếu là CHAT"
@@ -143,6 +147,7 @@ Lưu ý:
 - "thứ 4 tuần sau": tính đúng ngày thứ 4 của tuần tiếp theo.
 - "mai", "ngày mai": ngày kế tiếp.
 - Nếu người dùng yêu cầu báo cáo (ví dụ: "báo cáo hôm nay", "gửi báo cáo", "xem báo cáo", "báo cáo", "báo cáo ngày 16/10", "chạy báo cáo") -> intent BẮT BUỘC là "GENERATE_REPORT". Nếu có ngày thì trả về targetDate tương ứng.
+- Nếu người dùng yêu cầu quản lý lịch, phân tích lịch trình, đánh giá lịch trình theo ma trận Eisenhower (ví dụ: "quản lý", "quản lý lịch trình", "phân tích lịch", "đánh giá lịch", "ma trận eisenhower", "tối ưu lịch", "quản lý lịch của tôi") -> intent BẮT BUỘC là "ANALYZE_SCHEDULE". Gán scheduleScope tương ứng ("today" nếu hỏi hôm nay, "month" nếu hỏi tháng, "upcoming" nếu hỏi sắp tới, mặc định "week").
 - Nếu người dùng gửi link Google Sheet cài đặt báo cáo (ví dụ: "cài link báo cáo https://docs.google.com/...", "link báo cáo https://...", hoặc chỉ gửi link docs.google.com/spreadsheets/...) -> intent BẮT BUỘC là "SET_REPORT_URL", reportUrl là link Google Sheet đó.
 - Nếu người dùng yêu cầu đổi giờ gửi báo cáo (ví dụ: "đổi giờ báo cáo sang 15h", "cài giờ gửi báo cáo lúc 15:00") -> intent là "SET_REPORT_TIME", reminderTime là "15:00".
 - Nếu người dùng hỏi xem lịch của một ngày cụ thể (ví dụ: "lịch ngày 22", "ngày 22 có lịch gì không", "lịch 22/10", "lịch thứ 4 tuần sau", "xem lịch ngày 25") -> intent BẮT BUỘC là "VIEW_DATE", targetDate là "YYYY-MM-DD" tương ứng (ví dụ: "2026-10-22"). TUYỆT ĐỐI KHÔNG xếp vào SEARCH_EVENTS.
@@ -276,6 +281,18 @@ Tin nhắn người dùng: "${text}"
         };
       }
 
+      if (parsed.intent === 'ANALYZE_SCHEDULE') {
+        let scheduleScope: 'today' | 'week' | 'month' | 'upcoming' = 'week';
+        if (['today', 'week', 'month', 'upcoming'].includes(parsed.scheduleScope)) {
+          scheduleScope = parsed.scheduleScope;
+        }
+        return {
+          intent: 'ANALYZE_SCHEDULE',
+          scheduleScope,
+          aiReply: parsed.aiReply,
+        };
+      }
+
       return {
         intent: parsed.intent || 'UNKNOWN',
         searchQuery: parsed.searchQuery,
@@ -333,6 +350,22 @@ Tin nhắn người dùng: "${text}"
         intent: 'GENERATE_REPORT',
         targetDate,
       };
+    }
+
+    // 0.8. Check Analyze Schedule / Eisenhower
+    if (
+      /^(?:[\u{1F300}-\u{1F9FF}]\s*)?(?:quản\s*lý|quản\s*lý\s*lịch(?:\s*trình)?|phân\s*tích\s*lịch(?:\s*trình)?|đánh\s*giá\s*lịch(?:\s*trình)?|ma\s*trận\s*eisenhower|eisenhower|tối\s*ưu\s*lịch)(?:\s*(?:hôm\s*nay|tuần\s*này|tháng\s*này|sắp\s*tới))?$/iu.test(
+        cleanLower,
+      ) ||
+      /(?:ma\s*trận\s*eisenhower|phân\s*tích\s*theo\s*eisenhower|đánh\s*giá\s*lịch\s*của\s*tôi|quản\s*lý\s*lịch\s*của\s*tôi)/i.test(
+        cleanLower,
+      )
+    ) {
+      let scope: 'today' | 'week' | 'month' | 'upcoming' = 'week';
+      if (/hôm\s*nay/i.test(cleanLower)) scope = 'today';
+      else if (/tháng/i.test(cleanLower)) scope = 'month';
+      else if (/sắp\s*tới|tới/i.test(cleanLower)) scope = 'upcoming';
+      return { intent: 'ANALYZE_SCHEDULE', scheduleScope: scope };
     }
 
     // 1. Check Set Reminder Time or Toggle
@@ -667,5 +700,177 @@ Tin nhắn người dùng: "${text}"
       location,
       description: undefined,
     };
+  }
+
+  /**
+   * Analyze calendar events using Eisenhower Matrix and provide AI evaluations & recommendations
+   */
+  async analyzeEisenhowerMatrix(
+    events: CalendarEvent[],
+    scopeTitle = 'Sắp tới',
+  ): Promise<string> {
+    if (events.length === 0) {
+      return (
+        `🧠 <b>QUẢN LÝ LỊCH TRÌNH BẰNG AI (MA TRẬN EISENHOWER)</b>\n\n` +
+        `📅 <i>Phạm vi: ${scopeTitle}</i>\n\n` +
+        `📭 Hiện tại bạn chưa có sự kiện nào trong danh sách.\n` +
+        `💡 <i>Hãy thêm lịch mới (ví dụ: "mai 9h họp chiến lược", "học tiếng Anh 19h") để AI phân tích và tối ưu quỹ thời gian cho bạn nhé!</i>`
+      );
+    }
+
+    // Format events list for Gemini prompt
+    const eventsFormatted = events
+      .map((e, idx) => {
+        const start = new Date(e.startTime).toLocaleString('vi-VN', {
+          timeZone: 'Asia/Ho_Chi_Minh',
+          weekday: 'short',
+          day: '2-digit',
+          month: '2-digit',
+          hour: '2-digit',
+          minute: '2-digit',
+        });
+        const end = new Date(e.endTime).toLocaleTimeString('vi-VN', {
+          timeZone: 'Asia/Ho_Chi_Minh',
+          hour: '2-digit',
+          minute: '2-digit',
+        });
+        return `${idx + 1}. "${e.summary}" (${start} → ${end})${e.location ? ' tại ' + e.location : ''}${e.description ? ' - ' + e.description : ''}`;
+      })
+      .join('\n');
+
+    const prompt = `
+Bạn là chuyên gia cố vấn năng suất hàng đầu về quản lý thời gian và quản trị cá nhân.
+Nhiệm vụ: Phân tích danh sách lịch trình sau đây của người dùng theo Phương pháp Ma trận Eisenhower (Eisenhower Matrix) và đưa ra đánh giá, nhận xét, lời khuyên tối ưu lịch.
+
+Danh sách sự kiện (${scopeTitle}):
+${eventsFormatted}
+
+Yêu cầu định dạng phản hồi:
+- Sử dụng chuẩn HTML của Telegram (dùng <b>, <i>, <code>). TUYỆT ĐỐI KHÔNG dùng markdown (không dùng **, ##, \`\`\`).
+- Cấu trúc phản hồi rõ ràng, mạch lạc, đẹp mắt, có emoji sinh động:
+  1. Tiêu đề: 🧠 <b>PHÂN TÍCH LỊCH TRÌNH (MA TRẬN EISENHOWER)</b>\n📅 <i>Phạm vi: ${scopeTitle} (${events.length} sự kiện)</i>
+  2. Phân loại từng sự kiện vào đúng 4 góc phần tư:
+     🔴 <b>Q1: Khẩn cấp & Quan trọng (Làm ngay)</b>: Các deadline sát nút, họp quan trọng với đối tác/sếp/team, sự cố cần giải quyết ngay.
+     🔵 <b>Q2: Không khẩn cấp nhưng Quan trọng (Lên kế hoạch & Đầu tư)</b>: Học tập phát triển kỹ năng (học lái xe, học tập), rèn luyện sức khỏe, đào tạo/training, công việc chiến lược dài hạn, xây dựng mối quan hệ.
+     🟡 <b>Q3: Khẩn cấp nhưng Không quan trọng (Ủy quyền / Giảm thiểu)</b>: Việc phát sinh gấp, họp sự vụ định kỳ, việc có thể giao người khác.
+     ⚪ <b>Q4: Không khẩn cấp & Không quan trọng (Loại bỏ)</b>: Việc tốn thời gian, giải trí thừa thãi.
+     (Ghi chú ngắn lý do vì sao xếp sự kiện vào góc đó).
+  3. 📊 <b>ĐÁNH GIÁ CHẤT LƯỢNG LỊCH TRÌNH:</b>
+     - Nhận xét tỷ lệ phân bổ thời gian. Bạn có đang bị quá tải bởi việc gấp (chữa cháy Q1) hay đang chủ động đầu tư cho tương lai (Q2)?
+     - Mức độ cân bằng giữa công việc, học tập và cuộc sống.
+  4. 💡 <b>LỜI KHUYÊN & ĐỀ XUẤT TỐI ƯU CỦA AI:</b>
+     - 2-3 đề xuất cụ thể (ví dụ: cần chuẩn bị gì trước các buổi hẹn quan trọng, nên dành thêm thời gian nghỉ ngơi hoặc dời lịch nào).
+
+Hãy trả lời bằng tiếng Việt chuyên nghiệp, súc tích và truyền cảm hứng.
+`;
+
+    if (this.genAI) {
+      try {
+        const preferredModel =
+          this.configService.get<string>('GEMINI_MODEL') ||
+          process.env.GEMINI_MODEL ||
+          'gemini-3-flash-preview';
+
+        let response;
+        try {
+          response = await this.genAI.models.generateContent({
+            model: preferredModel,
+            contents: prompt,
+          });
+        } catch (err: any) {
+          response = await this.genAI.models.generateContent({
+            model: 'gemini-2.5-flash',
+            contents: prompt,
+          });
+        }
+
+        const reply = response.text?.trim();
+        if (reply) {
+          return reply;
+        }
+      } catch (err) {
+        this.logger.error('Error generating Eisenhower analysis with Gemini:', err);
+      }
+    }
+
+    // Fallback rule-based if AI not reachable
+    return this.fallbackEisenhowerAnalysis(events, scopeTitle);
+  }
+
+  private fallbackEisenhowerAnalysis(events: CalendarEvent[], scopeTitle: string): string {
+    const q1: CalendarEvent[] = []; // Urgent & Important (Do First)
+    const q2: CalendarEvent[] = []; // Not Urgent & Important (Schedule)
+    const q3: CalendarEvent[] = []; // Urgent & Not Important (Delegate)
+    const q4: CalendarEvent[] = []; // Not Urgent & Not Important (Eliminate)
+
+    for (const ev of events) {
+      const titleLower = ev.summary.toLowerCase();
+      if (/họp|khẩn|gấp|sự cố|deadline|báo cáo|quan trọng|power team/i.test(titleLower)) {
+        q1.push(ev);
+      } else if (/học|training|đào tạo|chiến lược|phát triển|sách|sức khỏe|tập|gym/i.test(titleLower)) {
+        q2.push(ev);
+      } else if (/gọi|trả lời|nhờ|hỗ trợ|mua|giao/i.test(titleLower)) {
+        q3.push(ev);
+      } else {
+        q2.push(ev);
+      }
+    }
+
+    let out = `🧠 <b>PHÂN TÍCH LỊCH TRÌNH THEO MA TRẬN EISENHOWER</b>\n`;
+    out += `📅 <i>Phạm vi: ${scopeTitle} (${events.length} sự kiện)</i>\n\n`;
+
+    out += `🔴 <b>Q1: KHẨN CẤP & QUAN TRỌNG (Làm ngay)</b>\n`;
+    if (q1.length === 0) {
+      out += `• <i>Không có sự kiện khẩn cấp gây áp lực. Tốt!</i>\n`;
+    } else {
+      q1.forEach((e) => {
+        const timeStr = new Date(e.startTime).toLocaleTimeString('vi-VN', {
+          hour: '2-digit',
+          minute: '2-digit',
+          timeZone: 'Asia/Ho_Chi_Minh',
+        });
+        out += `• <b>${e.summary}</b> (lúc ${timeStr}) — Cuộc họp/công việc trọng tâm cần tập trung xử lý.\n`;
+      });
+    }
+    out += `\n`;
+
+    out += `🔵 <b>Q2: QUAN TRỌNG & KHÔNG KHẨN CẤP (Lên kế hoạch)</b>\n`;
+    if (q2.length === 0) {
+      out += `• <i>Chưa có sự kiện đầu tư phát triển dài hạn.</i>\n`;
+    } else {
+      q2.forEach((e) => {
+        const timeStr = new Date(e.startTime).toLocaleTimeString('vi-VN', {
+          hour: '2-digit',
+          minute: '2-digit',
+          timeZone: 'Asia/Ho_Chi_Minh',
+        });
+        out += `• <b>${e.summary}</b> (lúc ${timeStr}) — Hoạt động phát triển bản thân, kỹ năng và chiến lược.\n`;
+      });
+    }
+    out += `\n`;
+
+    out += `🟡 <b>Q3: KHẨN CẤP & KHÔNG QUAN TRỌNG (Ủy quyền / Rút gọn)</b>\n`;
+    if (q3.length === 0) {
+      out += `• <i>Không có công việc vụn vặt gây gián đoạn.</i>\n`;
+    } else {
+      q3.forEach((e) => {
+        out += `• <b>${e.summary}</b> — Cân nhắc rút ngắn thời gian hoặc bàn giao nếu có thể.\n`;
+      });
+    }
+    out += `\n`;
+
+    out += `⚪ <b>Q4: KHÔNG KHẨN CẤP & KHÔNG QUAN TRỌNG (Loại bỏ)</b>\n`;
+    out += `• <i>Không phát hiện lịch gây lãng phí thời gian.</i>\n\n`;
+
+    out += `📊 <b>ĐÁNH GIÁ TỔNG QUAN:</b>\n`;
+    const q2Percent = Math.round((q2.length / events.length) * 100);
+    out += `• <b>Mức độ tập trung:</b> Bạn đang dành khoảng <b>${q2Percent}%</b> thời gian cho nhóm Q2 (các mục tiêu quan trọng và phát triển bản thân). Đây là dấu hiệu của người quản lý thời gian rất chủ động!\n`;
+    out += `• <b>Áp lực thời gian:</b> ${q1.length > 2 ? '⚠️ Có một số việc khẩn cấp, bạn nên chuẩn bị tài liệu sớm để tránh quá tải.' : '✅ Mức độ khẩn cấp thấp, lịch trình rất cân bằng.'}\n\n`;
+
+    out += `💡 <b>GỢI Ý TỐI ƯU CỦA AI:</b>\n`;
+    out += `1. Dành 15-30 phút đầu ngày rà soát các việc trong Q1 để hoàn thành dứt điểm.\n`;
+    out += `2. Bảo vệ các khung giờ học tập & phát triển trong Q2, tránh bị các việc đột xuất chen ngang.\n`;
+
+    return out;
   }
 }
