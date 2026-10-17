@@ -83,6 +83,17 @@ export class AiService {
   async processMessage(userText: string): Promise<ProcessedUserMessage> {
     const text = userText.trim();
 
+    // 0. Quick shortcut check for standard buttons & report/schedule keywords
+    const quickNlp = this.parseWithRuleBasedNlp(text);
+    if (
+      quickNlp.intent === 'GENERATE_REPORT' ||
+      quickNlp.intent === 'ANALYZE_SCHEDULE' ||
+      quickNlp.intent === 'SET_REPORT_URL' ||
+      quickNlp.intent === 'SET_REPORT_TIME'
+    ) {
+      return quickNlp;
+    }
+
     // 1. If Gemini AI is available, use it for intelligent NLU
     if (this.genAI) {
       try {
@@ -95,8 +106,8 @@ export class AiService {
       }
     }
 
-    // 2. Rule-based Vietnamese NLP Parser
-    return this.parseWithRuleBasedNlp(text);
+    // 2. Fallback to Rule-based Vietnamese NLP Parser
+    return quickNlp;
   }
 
   /**
@@ -146,7 +157,8 @@ Phân tích tin nhắn của người dùng và trả về DUY NHẤT một đ�
 Lưu ý:
 - "thứ 4 tuần sau": tính đúng ngày thứ 4 của tuần tiếp theo.
 - "mai", "ngày mai": ngày kế tiếp.
-- Nếu người dùng yêu cầu báo cáo (ví dụ: "báo cáo hôm nay", "gửi báo cáo", "xem báo cáo", "báo cáo", "báo cáo ngày 16/10", "chạy báo cáo") -> intent BẮT BUỘC là "GENERATE_REPORT". Nếu có ngày thì trả về targetDate tương ứng.
+- BẤT KỲ tin nhắn nào có từ "báo cáo" (ví dụ: "báo cáo", "📊 Báo cáo", "báo cáo ngày 15", "báo cáo ngày 15/10", "báo cáo hôm nay", "báo cáo hôm qua", "chạy báo cáo", "xem báo cáo", "gửi báo cáo") mà không phải là cài link hay đổi giờ -> intent BẮT BUỘC là "GENERATE_REPORT". TUYỆT ĐỐI KHÔNG xếp vào VIEW_DATE hay CHAT.
+- Nếu người dùng nói "báo cáo ngày 15" -> targetDate BẮT BUỘC là ngày 15 của tháng hiện tại (ví dụ: "2026-10-15"). TUYỆT ĐỐI KHÔNG xếp vào VIEW_DATE.
 - Nếu người dùng yêu cầu quản lý lịch, phân tích lịch trình, đánh giá lịch trình theo ma trận Eisenhower (ví dụ: "quản lý", "quản lý lịch trình", "phân tích lịch", "đánh giá lịch", "ma trận eisenhower", "tối ưu lịch", "quản lý lịch của tôi") -> intent BẮT BUỘC là "ANALYZE_SCHEDULE", scheduleScope BẮT BUỘC là "month" (chỉ phân tích lịch của tháng hiện tại).
 - Nếu người dùng gửi link Google Sheet cài đặt báo cáo (ví dụ: "cài link báo cáo https://docs.google.com/...", "link báo cáo https://...", hoặc chỉ gửi link docs.google.com/spreadsheets/...) -> intent BẮT BUỘC là "SET_REPORT_URL", reportUrl là link Google Sheet đó.
 - Nếu người dùng yêu cầu đổi giờ gửi báo cáo (ví dụ: "đổi giờ báo cáo sang 15h", "cài giờ gửi báo cáo lúc 15:00") -> intent là "SET_REPORT_TIME", reminderTime là "15:00".
@@ -331,16 +343,27 @@ Tin nhắn người dùng: "${text}"
 
     // 0.7. Check Generate Report
     if (
-      /^(?:gửi\s+|xem\s+|lấy\s+|chạy\s+)?báo\s*cáo(?:\s+công\s+việc|\s+vận\s+hành|\s+hôm\s*nay|\s+ngày\s+(\d{1,2})[\/\-](\d{1,2}))?$/i.test(
-        cleanLower,
-      ) || cleanLower === 'báo cáo'
+      /(?:^|[\u{1F300}-\u{1F9FF}\s])báo\s*cáo/iu.test(cleanLower) &&
+      !/(?:link|url|file|cài\s*đặt\s*link|cài\s*link|giờ\s*gửi|đổi\s*giờ)/i.test(cleanLower)
     ) {
-      const match = cleanLower.match(/ngày\s+(\d{1,2})[\/\-](\d{1,2})/i);
       let targetDate: Date | undefined;
-      if (match) {
-        const d = parseInt(match[1], 10);
-        const m = parseInt(match[2], 10) - 1;
-        targetDate = new Date(referenceDate.getFullYear(), m, d);
+      const dateMatch = cleanLower.match(/(\d{1,2})[\/\-](\d{1,2})(?:[\/\-](\d{4}))?/);
+      const singleDayMatch = cleanLower.match(/(?:ngày\s+)(\d{1,2})(?!\d)/i);
+
+      if (dateMatch) {
+        const d = parseInt(dateMatch[1], 10);
+        const m = parseInt(dateMatch[2], 10) - 1;
+        const y = dateMatch[3] ? parseInt(dateMatch[3], 10) : referenceDate.getFullYear();
+        targetDate = new Date(y, m, d);
+      } else if (singleDayMatch) {
+        const d = parseInt(singleDayMatch[1], 10);
+        targetDate = new Date(referenceDate.getFullYear(), referenceDate.getMonth(), d);
+      } else if (/hôm\s*nay/i.test(cleanLower)) {
+        targetDate = new Date(referenceDate.getFullYear(), referenceDate.getMonth(), referenceDate.getDate());
+      } else if (/hôm\s*qua|hôm\s*trước/i.test(cleanLower)) {
+        const yesterday = new Date(referenceDate);
+        yesterday.setDate(yesterday.getDate() - 1);
+        targetDate = yesterday;
       }
       return {
         intent: 'GENERATE_REPORT',
