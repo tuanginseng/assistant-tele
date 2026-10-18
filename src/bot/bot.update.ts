@@ -1169,16 +1169,25 @@ export class BotUpdate {
       endTime: Date;
       description?: string;
       location?: string;
+      tag?: string;
     },
   ) {
     try {
-      const createdEvent = await this.calendarService.createEvent({
-        summary: eventData.summary,
-        startTime: eventData.startTime.toISOString(),
-        endTime: eventData.endTime.toISOString(),
-        description: eventData.description,
-        location: eventData.location,
-      });
+      const tag = eventData.tag || this.aiService.classifyTag(eventData.summary, eventData.description);
+      const matchedCal = await this.calendarService.findCalendarByTag(tag);
+      const targetCalendarId = matchedCal ? matchedCal.id : undefined;
+
+      const createdEvent = await this.calendarService.createEvent(
+        {
+          summary: eventData.summary,
+          startTime: eventData.startTime.toISOString(),
+          endTime: eventData.endTime.toISOString(),
+          description: eventData.description,
+          location: eventData.location,
+          calendarName: matchedCal ? matchedCal.summary : undefined,
+        },
+        targetCalendarId,
+      );
 
       const eventInfo = this.botService.formatEvent(createdEvent);
       await ctx.reply(`✅ <b>Đã tạo sự kiện thành công!</b>\n\n${eventInfo}`, {

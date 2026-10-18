@@ -45,6 +45,9 @@ export class BotService {
 
     const prefix = index !== undefined ? `<b>${index + 1}.</b> ` : '';
     let text = `${prefix}📌 <b>${this.escapeHtml(event.summary)}</b>\n`;
+    if (event.calendarName) {
+      text += `   🏷️ Tag: <b>${this.escapeHtml(event.calendarName)}</b>\n`;
+    }
     text += `   📅 ${this.escapeHtml(dateStr)}\n`;
     text += `   🕐 ${startTimeStr} → ${endTimeStr}\n`;
 

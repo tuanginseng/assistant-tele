@@ -9,6 +9,7 @@ export interface ParsedEventData {
   endTime: Date;
   description?: string;
   location?: string;
+  tag?: string;
 }
 
 export interface UpdateEventData {
@@ -132,7 +133,8 @@ Phân tích tin nhắn của người dùng và trả về DUY NHẤT một đ�
     "startTime": "ISO 8601 string với múi giờ +07:00",
     "endTime": "ISO 8601 string với múi giờ +07:00 (mặc định nếu người dùng không nói thì +1 tiếng so với startTime)",
     "description": "Mô tả nếu có",
-    "location": "Địa điểm nếu có"
+    "location": "Địa điểm nếu có",
+    "tag": "Tên tag/lịch phù hợp nhất: 'Work' | 'Study' | 'Read' | 'Exercise' | 'Gia đình' | 'Daily' | 'Personal'"
   },
   "update": {
     "targetEventTitle": "tên sự kiện cần tìm để sửa (ví dụ: học lái xe, họp nhóm)",
@@ -157,6 +159,14 @@ Phân tích tin nhắn của người dùng và trả về DUY NHẤT một đ�
 Lưu ý:
 - "thứ 4 tuần sau": tính đúng ngày thứ 4 của tuần tiếp theo.
 - "mai", "ngày mai": ngày kế tiếp.
+- Phân loại tag tự động cho trường "tag" của "event" vào đúng 1 trong các Tag sau:
+  + "Work": Công việc, dự án, gặp khách hàng/đối tác, họp hành (họp BNI, họp team, họp công ty), làm việc, quay video, đào tạo/training nội bộ, hợp đồng, bán hàng, workshop, hội thảo...
+  + "Study": Học tập, học kỹ năng mới, học lái xe, khóa học, ôn thi, nghiên cứu, lớp học, thực hành, webinar...
+  + "Read": Đọc sách, đọc tài liệu chuyên ngành...
+  + "Exercise": Tập thể dục, gym, chạy bộ, đi bộ, đạp xe, bơi lội, yoga, đá bóng, cầu lông, tennis, rèn luyện sức khỏe...
+  + "Gia đình": Việc gia đình, về quê, thăm bố mẹ/ông bà, con cái, đón con, người thân, đám giỗ họ hàng...
+  + "Daily": Sinh hoạt hàng ngày, cafe, cà phê, ăn uống, đi chợ, siêu thị, dọn dẹp nhà cửa, rửa xe...
+  + "Personal": Các việc cá nhân, riêng tư khác không thuộc các tag trên.
 - BẤT KỲ tin nhắn nào có từ "báo cáo" (ví dụ: "báo cáo", "📊 Báo cáo", "báo cáo ngày 15", "báo cáo ngày 15/10", "báo cáo hôm nay", "báo cáo hôm qua", "chạy báo cáo", "xem báo cáo", "gửi báo cáo") mà không phải là cài link hay đổi giờ -> intent BẮT BUỘC là "GENERATE_REPORT". TUYỆT ĐỐI KHÔNG xếp vào VIEW_DATE hay CHAT.
 - Nếu người dùng nói "báo cáo ngày 15" -> targetDate BẮT BUỘC là ngày 15 của tháng hiện tại (ví dụ: "2026-10-15"). TUYỆT ĐỐI KHÔNG xếp vào VIEW_DATE.
 - Nếu người dùng yêu cầu quản lý lịch, phân tích lịch trình, đánh giá lịch trình theo ma trận Eisenhower (ví dụ: "quản lý", "quản lý lịch trình", "phân tích lịch", "đánh giá lịch", "ma trận eisenhower", "tối ưu lịch", "quản lý lịch của tôi") -> intent BẮT BUỘC là "ANALYZE_SCHEDULE", scheduleScope BẮT BUỘC là "month" (chỉ phân tích lịch của tháng hiện tại).
@@ -168,7 +178,7 @@ Lưu ý:
 - Nếu người dùng hỏi xem lịch tháng này (ví dụ: "lịch tháng này", "lịch cả tháng này", "tháng này có lịch gì", "tháng này có gì") -> intent là "VIEW_THIS_MONTH".
 - Nếu người dùng hỏi xem lịch tháng sau (ví dụ: "lịch tháng sau", "tháng sau có lịch gì") -> intent là "VIEW_NEXT_MONTH".
 - Chỉ khi người dùng nói chung chung "lịch sắp tới", "sự kiện sắp tới", "xem lịch" mà không nói rõ tuần/tháng nào -> intent mới là "VIEW_UPCOMING".
-- Nếu người dùng nhắn: "thêm lịch học lái xe từ 13h-17h ngày thứ 4 tuần sau" -> intent là "CREATE_EVENT", summary là "Học lái xe", startTime lúc 13:00, endTime lúc 17:00.
+- Nếu người dùng nhắn: "thêm lịch học lái xe từ 13h-17h ngày thứ 4 tuần sau" -> intent là "CREATE_EVENT", summary là "Học lái xe", tag là "Study", startTime lúc 13:00, endTime lúc 17:00.
 - Nếu người dùng nhắn: "sửa lịch học lái xe thành 13h30" -> intent là "UPDATE_EVENT", update: { targetEventTitle: "học lái xe", newTimeStr: "13h30" }.
 - Nếu người dùng nhắn: "đổi lịch họp sang 15h ngày mai" -> intent là "UPDATE_EVENT", update: { targetEventTitle: "họp", newTimeStr: "15h", newDateStr: "ngày mai" }.
 - Nếu người dùng nhắn: "cài đặt giờ thông báo lịch hàng ngày lúc 8h" -> intent là "SET_REMINDER_TIME", reminderTime: "08:00".
@@ -211,6 +221,7 @@ Tin nhắn người dùng: "${text}"
       const parsed = JSON.parse(cleanJson);
 
       if (parsed.intent === 'CREATE_EVENT' && parsed.event?.startTime && parsed.event?.summary) {
+        const tag = parsed.event.tag || this.classifyTag(parsed.event.summary, parsed.event.description);
         return {
           intent: 'CREATE_EVENT',
           event: {
@@ -219,6 +230,7 @@ Tin nhắn người dùng: "${text}"
             endTime: parsed.event.endTime ? new Date(parsed.event.endTime) : new Date(new Date(parsed.event.startTime).getTime() + 3600000),
             description: parsed.event.description || undefined,
             location: parsed.event.location || undefined,
+            tag,
           },
           aiReply: parsed.aiReply,
         };
@@ -712,13 +724,50 @@ Tin nhắn người dùng: "${text}"
       summary = 'Sự kiện mới';
     }
 
+    const tag = this.classifyTag(summary, undefined);
+
     return {
       summary,
       startTime,
       endTime,
       location,
       description: undefined,
+      tag,
     };
+  }
+
+  /**
+   * Classify event summary and description into one of the user's Google Calendar tags
+   */
+  public classifyTag(summary: string, description?: string): string {
+    const text = `${summary || ''} ${description || ''}`.toLowerCase();
+
+    // 1. Read
+    if (/(đọc\s*sách|đọc\s*tài\s*liệu|đọc\s*báo|\bsách\b)/i.test(text)) {
+      return 'Read';
+    }
+    // 2. Exercise
+    if (/(tập\s*thể\s*dục|thể\s*thao|gym|chạy\s*bộ|đạp\s*xe|bơi|yoga|đá\s*bóng|cầu\s*lông|tennis|workout|thể\s*lực)/i.test(text)) {
+      return 'Exercise';
+    }
+    // 3. Study
+    if (/(học\s*lái\s*xe|học\s*tập|\bhọc\b|khóa\s*học|ôn\s*thi|lớp\s*học|bài\s*tập|nghiên\s*cứu|thực\s*hành|webinar|đào\s*tạo|training)/i.test(text)) {
+      return 'Study';
+    }
+    // 4. Gia đình
+    if (/(gia\s*đình|bố\s*mẹ|về\s*quê|vợ\s*con|con\s*cái|đón\s*con|chở\s*con|đám\s*giỗ|thăm\s*(?:nhà|ông|bà)|người\s*thân)/i.test(text)) {
+      return 'Gia đình';
+    }
+    // 5. Daily
+    if (/(café|cafe|cà\s*phê|ăn\s*sáng|ăn\s*trưa|ăn\s*tối|đi\s*ăn|nhậu|đi\s*chợ|siêu\s*thị|mua\s*sắm|dọn\s*nhà|rửa\s*xe|sinh\s*hoạt)/i.test(text)) {
+      return 'Daily';
+    }
+    // 6. Work
+    if (/(họp|bni|gặp\s*khách|khách\s*hàng|đối\s*tác|dự\s*án|công\s*việc|công\s*ty|văn\s*phòng|quay\s*video|báo\s*cáo|hợp\s*đồng|bán\s*hàng|phỏng\s*vấn|workshop|hội\s*thảo|team)/i.test(text)) {
+      return 'Work';
+    }
+
+    return 'Personal';
   }
 
   /**
