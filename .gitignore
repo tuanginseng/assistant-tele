@@ -21,6 +21,9 @@ credentials.json
 .DS_Store
 Thumbs.db
 
+# runtime data (settings thay đổi theo môi trường)
+data/
+
 # logs
 *.log
 npm-debug.log*
