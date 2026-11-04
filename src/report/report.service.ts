@@ -21,13 +21,21 @@ const SHOP_NAME_MAP: Record<string, string> = {
   'bánh trương quý': 'Bánh TQ',
   'sagonest': 'sagonest',
   'peaboo store': 'PEA STO',
+  'peaboo': 'PEA STO',
   'mỹ phẩm úc (g&m': 'mỹ phẩm',
   'mỹ phẩm úc': 'mỹ phẩm',
   'mỹ phẩm': 'mỹ phẩm',
   'bông tẩy trang': 'bông tẩy trang',
   'trà an diệp': 'Trà An Diệp',
+  'trà an diệp ': 'Trà An Diệp',
   'mướp eco': 'Mướp ECO',
   'litbook': 'Litbook',
+  'hayar tino': 'Hayar Tino',
+  'vpp eras': 'VPP Eras',
+  'bunkids': 'Bunkids',
+  'nho': 'Nho',
+  'zest home': 'Zest Home',
+  'bigtech': 'BigTech',
 };
 
 // Desired display order for TikTok shops to match user sample
@@ -35,11 +43,13 @@ const PREFERRED_TIKTOK_ORDER = [
   'Bánh TQ',
   'sagonest',
   'PEA STO',
-  'mỹ phẩm',
   'Trà An Diệp',
   'bông tẩy trang',
   'Mướp ECO',
   'Litbook',
+  'Hayar Tino',
+  'VPP Eras',
+  'Bunkids',
 ];
 
 @Injectable()
@@ -305,7 +315,10 @@ export class ReportService implements OnModuleInit {
         sheets.find((s) => s.name.toUpperCase().includes('TỔNG')) ||
         { gid: '803202326' };
 
+      // For Shopee: prefer the G&M cosmetics shop sheet (not individual shop sheets)
       const shopeeSheet =
+        sheets.find((s) => s.name.toUpperCase().includes('SHOPEE G') || s.name.toUpperCase().includes('SHOPEE G&M')) ||
+        sheets.find((s) => s.name.toUpperCase().includes('SHOPEE') && !s.name.toUpperCase().includes('TRƯƠNG')) ||
         sheets.find((s) => s.name.toUpperCase().includes('SHOPEE')) ||
         { gid: '1025022338' };
 
@@ -334,7 +347,20 @@ export class ReportService implements OnModuleInit {
       }
 
       // 3. Parse TikTok shops
-      const headerRow = tiktokRows[0];
+      // Auto-detect header row: find the first row where col[1] looks like a shop name (not a date, not a sub-header keyword)
+      const SUB_HEADER_KEYWORDS = ['chi phí', 'doanh số', 'doanh thu', 'chi phi/doanh so', 'cp đã trừ', 'tổng', 'target', '%', 'người quản lý'];
+      let headerRowIndex = 0;
+      for (let ri = 0; ri < Math.min(tiktokRows.length, 5); ri++) {
+        const cell = (tiktokRows[ri][1] || '').toLowerCase().trim();
+        // Skip empty first cell rows and sub-header rows
+        if (!cell) continue;
+        const isSubHeader = SUB_HEADER_KEYWORDS.some((kw) => cell.includes(kw));
+        if (!isSubHeader) {
+          headerRowIndex = ri;
+          break;
+        }
+      }
+      const headerRow = tiktokRows[headerRowIndex];
       const shops: Array<{ colIndex: number; name: string }> = [];
       for (let c = 1; c < headerRow.length; c += 4) {
         const rawName = headerRow[c];
@@ -370,19 +396,22 @@ export class ReportService implements OnModuleInit {
       let report = `>Báo Cáo vận hành ngày ${d} / ${mStr}\n`;
       report += `1: tiktok    CP          DT          %HH\n`;
 
-      for (const shop of shops) {
-        let cp = '0 đ';
-        let dt = '0 đ';
-        let hh = '0 %';
+      if (!dataRow) {
+        report += `⚠️ Không tìm thấy dữ liệu ngày ${d}/${mStr} trong sheet TikTok.\n`;
+        report += `(Có thể sheet chưa cập nhật hoặc sai tháng)\n`;
+      } else {
+        for (const shop of shops) {
+          let cp = '0 đ';
+          let dt = '0 đ';
+          let hh = '0 %';
 
-        if (dataRow) {
           cp = this.formatMoney(dataRow[shop.colIndex]);
           dt = this.formatMoney(dataRow[shop.colIndex + 1]);
           // Column 4 is CP Đã Trừ Hoàn Hủy (%HH), fallback to Column 3 (Chi Phí/Doanh Số)
           hh = this.formatPercent(dataRow[shop.colIndex + 3] || dataRow[shop.colIndex + 2]);
-        }
 
-        report += `${shop.name}: ${cp} - ${dt} - ${hh}\n`;
+          report += `${shop.name}: ${cp} - ${dt} - ${hh}\n`;
+        }
       }
 
       report += `\n____________________\n`;
