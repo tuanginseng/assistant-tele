@@ -292,6 +292,7 @@ export class BotService {
 • <code>/report 16/10</code> — Xem báo cáo theo ngày cụ thể
 • <code>/set_report_url link_google_sheet</code> — Cập nhật file Google Sheet
 • <code>/report_settings</code> — Xem cấu hình báo cáo
+• <code>/target</code> — Cài target doanh số tháng cho từng shop
 • Tự động gửi báo cáo mỗi ngày lúc <b>15:00</b>
 
 ➕ <b>Lệnh thêm lịch (tùy chọn):</b>

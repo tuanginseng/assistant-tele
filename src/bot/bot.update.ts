@@ -5,11 +5,16 @@ import { GoogleCalendarService } from '../google-calendar/google-calendar.servic
 import { BotService } from './bot.service';
 import { AiService } from '../ai/ai.service';
 import { ReminderService } from '../reminder/reminder.service';
-import { ReportService } from '../report/report.service';
+import { ReportService, ShopTargetInfo } from '../report/report.service';
 
 @Update()
 export class BotUpdate {
   private readonly logger = new Logger(BotUpdate.name);
+  /** chatId → shop key (or DEFAULT_TARGET_KEY) waiting for the user to type a target amount */
+  private readonly pendingTargetInput = new Map<number, string>();
+  /** Shop list from the last /target screen (buttons reference shops by index) */
+  private targetShopList: ShopTargetInfo[] = [];
+  private static readonly DEFAULT_TARGET_KEY = '__default__';
 
   constructor(
     private readonly calendarService: GoogleCalendarService,
@@ -739,7 +744,7 @@ export class BotUpdate {
 
     const res = await this.reportService.generateDailyReport(targetDate);
     if (res.success && res.text) {
-      await ctx.reply(res.text);
+      await ctx.reply(res.text, { parse_mode: 'HTML', reply_markup: { inline_keyboard: [[{ text: '🎯 Cài target shop', callback_data: 'tgt_menu' }]] } });
     } else {
       await ctx.reply(
         `❌ <b>Không thể tạo báo cáo:</b>\n\n${res.error || 'Vui lòng kiểm tra lại link Google Sheets.'}`,
@@ -800,9 +805,262 @@ export class BotUpdate {
       `💡 <i>Lệnh thao tác nhanh:</i>\n` +
       `• <code>/report</code> — Xem báo cáo ngay lập tức\n` +
       `• <code>/set_report_url &lt;url&gt;</code> — Cài đặt link Google Sheet mới\n` +
+      `• <code>/target</code> — Cài target doanh số tháng cho từng shop\n` +
       `• <code>đổi giờ báo cáo sang 15h</code> — Đổi giờ gửi`,
-      { parse_mode: 'HTML', disable_web_page_preview: true } as any,
+      {
+        parse_mode: 'HTML',
+        disable_web_page_preview: true,
+        reply_markup: { inline_keyboard: [[{ text: '🎯 Cài target doanh số shop', callback_data: 'tgt_menu' }]] },
+      } as any,
     );
+  }
+
+  // =============================================
+  //  SHOP KPI TARGETS
+  // =============================================
+
+  private fmtTarget(amount: number): string {
+    if (amount <= 0) return 'không tính KPI';
+    if (amount >= 1e9) return `${(Math.round((amount / 1e9) * 100) / 100).toString().replace('.', ',')} tỷ`;
+    if (amount >= 1e6) return `${(Math.round((amount / 1e6) * 10) / 10).toString().replace('.', ',')}tr`;
+    return amount.toLocaleString('vi-VN').replace(/,/g, '.') + ' đ';
+  }
+
+  private shopLabel(shop: ShopTargetInfo): string {
+    return `${shop.name} (${shop.channel === 'tiktok' ? 'TikTok' : 'Shopee'})`;
+  }
+
+  /**
+   * /target                         → bảng target + nút chọn shop
+   * /target Bánh TQ 300tr           → đặt nhanh
+   * /target shopee mỹ phẩm 1 tỷ     → chỉ rõ kênh khi trùng tên
+   * /target mặc định 500tr          → đổi target mặc định
+   */
+  @Command('target')
+  @Command('kpi')
+  async handleTargetCommand(@Ctx() ctx: Context) {
+    if (ctx.chat) {
+      this.reportService.addChatId(ctx.chat.id);
+      this.pendingTargetInput.delete(ctx.chat.id);
+    }
+    const text = ((ctx.message as any)?.text || '').trim();
+    const args = text.split(/\s+/).slice(1).join(' ').trim();
+    if (!args) {
+      await this.showTargetMenu(ctx);
+      return;
+    }
+
+    // Last token(s) = amount, the rest = shop name. Try "300tr" and "300 tr".
+    const tokens = args.split(/\s+/);
+    let amount: number | null = null;
+    let namePart = '';
+    for (const take of [1, 2]) {
+      if (tokens.length <= take) continue;
+      const parsed = this.reportService.parseTargetAmount(tokens.slice(-take).join(''));
+      if (parsed !== null) {
+        amount = parsed;
+        namePart = tokens.slice(0, -take).join(' ');
+        break;
+      }
+    }
+    if (amount === null || !namePart) {
+      await ctx.reply(
+        '⚠️ Cú pháp: <code>/target &lt;tên shop&gt; &lt;số tiền&gt;</code>\nVí dụ: <code>/target Bánh TQ 300tr</code>, <code>/target mặc định 500tr</code>\nHoặc gõ <code>/target</code> để chọn shop bằng nút.',
+        { parse_mode: 'HTML' },
+      );
+      return;
+    }
+
+    if (/^(mặc định|mac dinh|default|tất cả|tat ca|all)$/i.test(namePart)) {
+      this.reportService.setDefaultTarget(amount);
+      await ctx.reply(`✅ Đã đặt <b>target mặc định</b>: <b>${this.fmtTarget(amount)}</b>/tháng (áp dụng cho shop chưa có target riêng).`, {
+        parse_mode: 'HTML',
+      });
+      return;
+    }
+
+    const res = await this.reportService.getShopTargets();
+    if (!res.success) {
+      await ctx.reply(`❌ Không tải được danh sách shop: ${this.botService.escapeHtml(res.error || '')}`, { parse_mode: 'HTML' });
+      return;
+    }
+    const norm = (v: string) => v.normalize('NFC').toLowerCase().trim();
+    let wanted = norm(namePart);
+    let channel: string | null = null;
+    const chMatch = wanted.match(/^(tiktok|shopee)\s+(.+)$/);
+    if (chMatch) {
+      channel = chMatch[1];
+      wanted = chMatch[2];
+    }
+    let matches = res.shops.filter((sh) => norm(sh.name) === wanted && (!channel || sh.channel === channel));
+    if (matches.length === 0) {
+      matches = res.shops.filter((sh) => norm(sh.name).includes(wanted) && (!channel || sh.channel === channel));
+    }
+    if (matches.length !== 1) {
+      const list = (matches.length ? matches : res.shops).map((sh) => `• ${this.botService.escapeHtml(this.shopLabel(sh))}`).join('\n');
+      await ctx.reply(
+        `${matches.length ? '⚠️ Tên shop trùng nhiều kênh, thêm <code>tiktok</code>/<code>shopee</code> trước tên shop:' : `⚠️ Không tìm thấy shop "<b>${this.botService.escapeHtml(namePart)}</b>". Các shop hiện có:`}\n${list}`,
+        { parse_mode: 'HTML' },
+      );
+      return;
+    }
+    this.reportService.setShopTarget(matches[0].key, amount);
+    await ctx.reply(
+      `✅ Đã đặt target <b>${this.botService.escapeHtml(this.shopLabel(matches[0]))}</b>: <b>${this.fmtTarget(amount)}</b>/tháng.`,
+      { parse_mode: 'HTML' },
+    );
+  }
+
+  private async showTargetMenu(ctx: Context, editMessage = false) {
+    const res = await this.reportService.getShopTargets();
+    if (!res.success) {
+      await ctx.reply(`❌ Không tải được danh sách shop: ${this.botService.escapeHtml(res.error || '')}`, { parse_mode: 'HTML' });
+      return;
+    }
+    this.targetShopList = res.shops;
+    const def = this.reportService.getDefaultTarget();
+
+    let msg = `🎯 <b>TARGET DOANH SỐ THÁNG THEO SHOP</b>\n\n`;
+    msg += `⚙️ Mặc định: <b>${this.fmtTarget(def)}</b>/tháng\n\n`;
+    for (const ch of ['tiktok', 'shopee'] as const) {
+      const shops = res.shops.filter((sh) => sh.channel === ch);
+      if (!shops.length) continue;
+      msg += `<b>${ch === 'tiktok' ? '🎵 TikTok' : '🛒 Shopee'}</b>\n`;
+      for (const sh of shops) {
+        msg += `• ${this.botService.escapeHtml(sh.name)}: <b>${this.fmtTarget(sh.target)}</b>${sh.isCustom ? '' : ' <i>(mặc định)</i>'}\n`;
+      }
+      msg += `\n`;
+    }
+    msg += `👇 <i>Bấm vào shop để đổi target, hoặc gõ nhanh:</i>\n<code>/target Bánh TQ 300tr</code>`;
+
+    const buttons = res.shops.map((sh, i) => ({
+      text: `${sh.channel === 'shopee' ? '🛒 ' : ''}${sh.name} · ${sh.target > 0 ? this.fmtTarget(sh.target) : '🚫'}`,
+      callback_data: `tgt_s:${i}`,
+    }));
+    const rows: any[][] = [];
+    for (let i = 0; i < buttons.length; i += 2) rows.push(buttons.slice(i, i + 2));
+    rows.push([{ text: `⚙️ Target mặc định · ${this.fmtTarget(def)}`, callback_data: 'tgt_def' }]);
+
+    const extra = { parse_mode: 'HTML', reply_markup: { inline_keyboard: rows } } as any;
+    if (editMessage) {
+      try {
+        await ctx.editMessageText(msg, extra);
+        return;
+      } catch {}
+    }
+    await ctx.reply(msg, extra);
+  }
+
+  @Action('tgt_menu')
+  async handleTargetMenuAction(@Ctx() ctx: Context) {
+    await ctx.answerCbQuery().catch(() => {});
+    await this.showTargetMenu(ctx);
+  }
+
+  @Action(/^tgt_s:(\d+)$/)
+  async handleTargetShopAction(@Ctx() ctx: Context) {
+    const idx = parseInt((ctx as any).match[1], 10);
+    const shop = this.targetShopList[idx];
+    if (!shop || !ctx.chat) {
+      await ctx.answerCbQuery('Danh sách shop đã thay đổi, đang tải lại...').catch(() => {});
+      await this.showTargetMenu(ctx);
+      return;
+    }
+    await ctx.answerCbQuery().catch(() => {});
+    this.pendingTargetInput.set(ctx.chat.id, shop.key);
+    await ctx.reply(
+      `✏️ Nhập target doanh số tháng cho <b>${this.botService.escapeHtml(this.shopLabel(shop))}</b>\n` +
+        `Hiện tại: <b>${this.fmtTarget(shop.target)}</b>${shop.isCustom ? '' : ' (mặc định)'}\n\n` +
+        `<i>Ví dụ: 300tr · 1,2 tỷ · 800000000</i>`,
+      {
+        parse_mode: 'HTML',
+        reply_markup: {
+          inline_keyboard: [
+            [
+              { text: '↩️ Dùng mặc định', callback_data: `tgt_reset:${idx}` },
+              { text: '🚫 Không tính KPI', callback_data: `tgt_zero:${idx}` },
+            ],
+            [{ text: '❌ Hủy', callback_data: 'tgt_cancel' }],
+          ],
+        },
+      },
+    );
+  }
+
+  @Action('tgt_def')
+  async handleTargetDefaultAction(@Ctx() ctx: Context) {
+    await ctx.answerCbQuery().catch(() => {});
+    if (!ctx.chat) return;
+    this.pendingTargetInput.set(ctx.chat.id, BotUpdate.DEFAULT_TARGET_KEY);
+    await ctx.reply(
+      `✏️ Nhập <b>target mặc định</b> (áp dụng cho shop chưa có target riêng)\n` +
+        `Hiện tại: <b>${this.fmtTarget(this.reportService.getDefaultTarget())}</b>\n\n<i>Ví dụ: 500tr</i>`,
+      { parse_mode: 'HTML', reply_markup: { inline_keyboard: [[{ text: '❌ Hủy', callback_data: 'tgt_cancel' }]] } },
+    );
+  }
+
+  @Action(/^tgt_(reset|zero):(\d+)$/)
+  async handleTargetQuickAction(@Ctx() ctx: Context) {
+    const [, op, idxStr] = (ctx as any).match;
+    const shop = this.targetShopList[parseInt(idxStr, 10)];
+    if (ctx.chat) this.pendingTargetInput.delete(ctx.chat.id);
+    if (!shop) {
+      await ctx.answerCbQuery('Danh sách shop đã thay đổi').catch(() => {});
+      await this.showTargetMenu(ctx);
+      return;
+    }
+    if (op === 'reset') this.reportService.resetShopTarget(shop.key);
+    else this.reportService.setShopTarget(shop.key, 0);
+    await ctx.answerCbQuery('Đã lưu').catch(() => {});
+    await ctx.reply(
+      op === 'reset'
+        ? `✅ <b>${this.botService.escapeHtml(this.shopLabel(shop))}</b> dùng target mặc định (${this.fmtTarget(this.reportService.getDefaultTarget())}).`
+        : `✅ <b>${this.botService.escapeHtml(this.shopLabel(shop))}</b> không tính KPI (không cảnh báo).`,
+      { parse_mode: 'HTML' },
+    );
+    await this.showTargetMenu(ctx);
+  }
+
+  @Action('tgt_cancel')
+  async handleTargetCancelAction(@Ctx() ctx: Context) {
+    if (ctx.chat) this.pendingTargetInput.delete(ctx.chat.id);
+    await ctx.answerCbQuery('Đã hủy').catch(() => {});
+    try {
+      await ctx.deleteMessage();
+    } catch {}
+  }
+
+  /** Handles the amount typed after tapping a shop. Returns true if the message was consumed. */
+  private async handlePendingTargetInput(ctx: Context, text: string): Promise<boolean> {
+    const chatId = ctx.chat?.id;
+    if (chatId === undefined || !this.pendingTargetInput.has(chatId)) return false;
+    const key = this.pendingTargetInput.get(chatId)!;
+
+    if (/^(hủy|huỷ|huy|cancel|thôi)$/i.test(text)) {
+      this.pendingTargetInput.delete(chatId);
+      await ctx.reply('Đã hủy cài target.');
+      return true;
+    }
+    const amount = this.reportService.parseTargetAmount(text);
+    if (amount === null) {
+      // Not an amount → let the message go through the normal assistant flow
+      this.pendingTargetInput.delete(chatId);
+      return false;
+    }
+    this.pendingTargetInput.delete(chatId);
+    if (key === BotUpdate.DEFAULT_TARGET_KEY) {
+      this.reportService.setDefaultTarget(amount);
+      await ctx.reply(`✅ Đã đặt <b>target mặc định</b>: <b>${this.fmtTarget(amount)}</b>/tháng.`, { parse_mode: 'HTML' });
+    } else {
+      this.reportService.setShopTarget(key, amount);
+      const shop = this.targetShopList.find((sh) => sh.key === key);
+      const label = shop ? this.shopLabel(shop) : key.split(':').slice(1).join(':');
+      await ctx.reply(`✅ Đã đặt target <b>${this.botService.escapeHtml(label)}</b>: <b>${this.fmtTarget(amount)}</b>/tháng.`, {
+        parse_mode: 'HTML',
+      });
+    }
+    await this.showTargetMenu(ctx);
+    return true;
   }
 
   // =============================================
@@ -815,6 +1073,11 @@ export class BotUpdate {
 
     // Ignore slash commands
     if (text.startsWith('/')) {
+      return;
+    }
+
+    // Amount typed after tapping a shop in the /target menu
+    if (await this.handlePendingTargetInput(ctx, text)) {
       return;
     }
 
@@ -1124,7 +1387,7 @@ export class BotUpdate {
           const reportRes = await this.reportService.generateDailyReport(result.targetDate);
           await cleanupStatus();
           if (reportRes.success && reportRes.text) {
-            await ctx.reply(reportRes.text);
+            await ctx.reply(reportRes.text, { parse_mode: 'HTML', reply_markup: { inline_keyboard: [[{ text: '🎯 Cài target shop', callback_data: 'tgt_menu' }]] } });
           } else {
             await ctx.reply(
               `❌ <b>Không thể tạo báo cáo:</b>\n\n${reportRes.error || 'Vui lòng kiểm tra lại link Google Sheets.'}`,
